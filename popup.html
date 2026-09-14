@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XiangqiBot</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 300px;
+      background: #0b0b18;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', 'Arial', sans-serif;
+      padding: 14px;
+      user-select: none;
+    }
+
+    /* ── Header ── */
+    .header {
+      text-align: center;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #1e1e38;
+    }
+    .header-title {
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 3px;
+      color: #c84b31;
+      text-transform: uppercase;
+    }
+    .header-title span { color: #e0e0e0; }
+    .header-sub {
+      font-size: 9px;
+      color: #333;
+      letter-spacing: 2px;
+      margin-top: 2px;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: #111125;
+      border: 1px solid #1e1e3a;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+    }
+    .card-title {
+      font-size: 8px;
+      letter-spacing: 2px;
+      color: #333;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    /* ── Status rows ── */
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 3px 0;
+      font-size: 11px;
+    }
+    .lbl { color: #444; font-size: 10px; }
+    .val { font-weight: 700; letter-spacing: 1px; }
+    .val.cyan   { color: #00d4ff; }
+    .val.green  { color: #2ecc71; }
+    .val.yellow { color: #f1c40f; }
+    .val.warn   { color: #e67e22; }
+    .val.dim    { color: #555; }
+
+    .blink { animation: blink 0.9s step-start infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    .divider { border: none; border-top: 1px solid #1a1a32; margin: 7px 0; }
+
+    /* ── Color badge ── */
+    .color-badge {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 700;
+      font-size: 11px;
+    }
+
+    /* ── Move frame ── */
+    .move-frame {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 8px 4px;
+    }
+    .move-piece {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .piece-icon { line-height: 1; }
+    .piece-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: #bbb;
+      text-align: center;
+    }
+    .piece-coord {
+      font-size: 9px;
+      color: #444;
+      font-family: 'Courier New', monospace;
+      letter-spacing: 1px;
+    }
+    .piece-side-red  .piece-label { color: #e0795c; }
+    .piece-side-blk  .piece-label { color: #aaa; }
+
+    .move-arrow-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      flex: 0 0 auto;
+      min-width: 52px;
+    }
+    .arrow-svg { opacity: 0.7; }
+    .capture-tag {
+      font-size: 8px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      color: #c84b31;
+      background: rgba(200,75,49,0.15);
+      border: 1px solid rgba(200,75,49,0.4);
+      border-radius: 3px;
+      padding: 1px 5px;
+    }
+    .move-desc {
+      text-align: center;
+      font-size: 9px;
+      color: #555;
+      margin-top: 2px;
+      letter-spacing: 0.5px;
+      min-height: 13px;
+    }
+
+    /* ── Empty move placeholder ── */
+    .piece-empty-icon {
+      width: 38px; height: 38px;
+      border: 1.5px dashed #252540;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #252540;
+      font-size: 18px;
+    }
+
+    /* ── Depth + Settings ── */
+    .settings-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 10px;
+    }
+    .settings-lbl { color: #555; }
+    .settings-row + .settings-row { margin-top: 6px; }
+
+    select {
+      background: #0d0d20;
+      border: 1px solid #2a2a50;
+      color: #bbb;
+      border-radius: 5px;
+      padding: 3px 7px;
+      font-size: 10px;
+      outline: none;
+      cursor: pointer;
+    }
+    select:focus { border-color: #c84b31; }
+
+    /* ── Buttons ── */
+    #toggleBtn {
+      width: 100%;
+      padding: 11px;
+      border: none;
+      border-radius: 7px;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      transition: background 0.2s, transform 0.1s;
+      margin-bottom: 6px;
+    }
+    #toggleBtn:active { transform: scale(0.97); }
+    #toggleBtn.on  { background: linear-gradient(135deg,#9b1e0e,#c0392b); color: #fff; }
+    #toggleBtn.off { background: linear-gradient(135deg,#1a7a45,#27ae60); color: #fff; }
+    #toggleBtn:disabled { background: #222; color: #444; cursor: not-allowed; }
+
+    .btn-row { display: flex; gap: 6px; }
+
+    #nowBtn {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #f1c40f;
+      border-radius: 6px;
+      background: #161b25;
+      color: #f1c40f;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #nowBtn:hover:not(:disabled) { background: #1e2530; }
+    #nowBtn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+    #resetBtn {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid #252540;
+      border-radius: 6px;
+      background: transparent;
+      color: #444;
+      font-size: 10px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #resetBtn:hover { border-color: #555; color: #aaa; }
+
+    /* ── Pieces count bar ── */
+    .pieces-bar {
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      padding: 4px 0;
+    }
+    .side-count {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .side-count.red-side { color: #e0795c; }
+    .side-count.blk-side { color: #888; }
+    .count-sep { color: #252540; font-size: 16px; }
+
+    .footer {
+      text-align: center;
+      font-size: 8px;
+      color: #1a1a30;
+      margin-top: 8px;
+      letter-spacing: 2px;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-title">⚔ Xiangqi<span>Bot</span></div>
+    <div class="header-sub">play.xiangqi.com · CLOUD ENGINE · v6.0</div>
+  </div>
+
+  <!-- Status card -->
+  <div class="card">
+    <div class="card-title">Trạng thái</div>
+    <div class="row">
+      <span class="lbl">STATUS</span>
+      <span class="val cyan" id="status">CHECKING...</span>
+    </div>
+    <div class="row">
+      <span class="lbl">MÀU CỦA BẠN</span>
+      <span class="color-badge" id="colorBadge">
+        <svg id="colorIcon" viewBox="0 0 40 40" width="22" height="22" style="display:none"></svg>
+        <span class="val" id="colorText">—</span>
+      </span>
+    </div>
+    <hr class="divider">
+    <div class="row">
+      <span class="lbl">ENGINE</span>
+      <span class="val" id="engineState">IDLE</span>
+    </div>
+    <div class="row">
+      <span class="lbl">DEPTH</span>
+      <span class="val cyan" id="depthDisplay">15</span>
+    </div>
+    <hr class="divider">
+    <!-- Pieces count -->
+    <div class="pieces-bar">
+      <div class="side-count red-side">
+        <svg viewBox="0 0 40 40" width="20" height="20">
+          <circle cx="20" cy="20" r="18" fill="#c84b31" stroke="#8b1a0a" stroke-width="2"/>
+          <circle cx="20" cy="20" r="13" fill="none" stroke="rgba(255,180,130,0.35)" stroke-width="1.5"/>
+          <text x="20" y="27" text-anchor="middle" fill="#fff" font-size="15" font-family="serif" font-weight="bold">帅</text>
+        </svg>
+        <span id="redCount">0</span> quân
+      </div>
+      <div class="count-sep">|</div>
+      <div class="side-count blk-side">
+        <svg viewBox="0 0 40 40" width="20" height="20">
+          <circle cx="20" cy="20" r="18" fill="#2a2a2a" stroke="#555" stroke-width="2"/>
+          <circle cx="20" cy="20" r="13" fill="none" stroke="rgba(200,200,200,0.2)" stroke-width="1.5"/>
+          <text x="20" y="27" text-anchor="middle" fill="#ddd" font-size="15" font-family="serif" font-weight="bold">将</text>
+        </svg>
+        <span id="blkCount">0</span> quân
+      </div>
+    </div>
+  </div>
+
+  <!-- Move info card -->
+  <div class="card">
+    <div class="card-title">Nước tốt nhất</div>
+    <div class="move-frame">
+      <!-- From piece -->
+      <div class="move-piece" id="moveFrom">
+        <div class="piece-icon">
+          <div class="piece-empty-icon">?</div>
+        </div>
+        <div class="piece-label">—</div>
+        <div class="piece-coord">—</div>
+      </div>
+
+      <!-- Arrow -->
+      <div class="move-arrow-col">
+        <svg class="arrow-svg" viewBox="0 0 52 16" width="52" height="16">
+          <line x1="2" y1="8" x2="42" y2="8" stroke="#2a2a50" stroke-width="2" stroke-linecap="round"/>
+          <polygon points="40,4 50,8 40,12" fill="#2a2a50"/>
+        </svg>
+        <div id="captureTag" class="capture-tag" style="display:none">ĂN</div>
+      </div>
+
+      <!-- To piece -->
+      <div class="move-piece" id="moveTo">
+        <div class="piece-icon">
+          <div class="piece-empty-icon">?</div>
+        </div>
+        <div class="piece-label">—</div>
+        <div class="piece-coord">—</div>
+      </div>
+    </div>
+    <div class="move-desc" id="moveDesc">Chưa có nước gợi ý</div>
+  </div>
+
+  <!-- Settings card -->
+  <div class="card">
+    <div class="card-title">Cài đặt</div>
+    <div class="settings-row">
+      <span class="settings-lbl">Độ sâu tính toán (Depth)</span>
+      <select id="depthSel">
+        <option value="5">5 — Nhanh</option>
+        <option value="10">10 — Cơ bản</option>
+        <option value="15" selected>15 — Chuẩn</option>
+        <option value="20">20 — Mạnh</option>
+        <option value="25">25 — Rất mạnh</option>
+        <option value="0">Movetime 3s</option>
+      </select>
+    </div>
+    <div class="settings-row" style="margin-top:8px">
+      <span class="settings-lbl">Màu của bạn</span>
+      <select id="colorSel">
+        <option value="auto">Tự động</option>
+        <option value="red">Đỏ (Red)</option>
+        <option value="black">Đen (Black)</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Buttons -->
+  <button id="toggleBtn" class="off" disabled>▶ BẬT HIGHLIGHT</button>
+  <div class="btn-row">
+    <button id="nowBtn" disabled>💡 Tính ngay</button>
+    <button id="resetBtn">↺ Reset màu</button>
+  </div>
+
+  <div class="footer">KIWI BROWSER · MV3 · FAIRY-STOCKFISH CLOUD</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
