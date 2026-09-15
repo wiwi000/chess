@@ -1,16 +1,15 @@
 {
   "manifest_version": 3,
   "name": "XiangqiBot — Highlight Best Move",
-  "version": "6.1.1",
-  "description": "Phân tích & highlight nước đi tốt nhất trên play.xiangqi.com — powered by Pikafish (cloud). Fix: highlight không còn bị đứng hình khi engine tính lâu.",
+  "version": "6.1.5",
+  "description": "Phân tích & highlight nước đi tốt nhất bằng Pikafish WebAssembly chạy trực tiếp trong extension.",
   "permissions": [
     "scripting",
     "storage",
     "activeTab"
   ],
   "host_permissions": [
-    "*://play.xiangqi.com/*",
-    "https://xiangqibot-server-production.up.railway.app/*"
+    "*://play.xiangqi.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -24,6 +23,20 @@
         "content.js"
       ],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "engine_worker.js",
+        "pikafish.js",
+        "pikafish.wasm",
+        "pikafish.data"
+      ],
+      "matches": [
+        "https://play.xiangqi.com/*",
+        "http://play.xiangqi.com/*"
+      ]
     }
   ],
   "action": {

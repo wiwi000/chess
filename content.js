@@ -227,6 +227,7 @@ function pieceSvgHtml(zh, isRed, size = 26) {
 
 /* ── Config ──────────────────────────────────────────── */
 const CFG = {
+  ENGINE_MODE: 'wasm', // 'wasm' chạy Pikafish trực tiếp, 'mock' dùng evaluator offline
   THINK_MS:  3000,   // movetime fallback (ms)
   DEPTH:     15,     // search depth (0 = use movetime instead)
   SETTLE_MS: 400,
@@ -284,12 +285,86 @@ let pendingTurn  = null;
    mạnh hơn Fairy-Stockfish nhờ NNUE được train chuyên biệt.
    ══════════════════════════════════════════════════════ */
 
-/* ── Cấu hình URL Cloudflare Worker ─────────────────── */
-/* Sau khi deploy worker, thay URL này bằng URL thực của bạn.
-   Ví dụ: 'https://xiangqibot-engine.tenban.workers.dev'       */
-const WORKER_URL = 'https://xiangqibot-server-production.up.railway.app';
-
 let _reqId = 0;
+let wasmAssetsPromise = null;
+
+function loadWasmAssets() {
+  if (wasmAssetsPromise) return wasmAssetsPromise;
+
+  const extensionUrl = file => chrome.runtime.getURL(file);
+  wasmAssetsPromise = Promise.all([
+    fetch(extensionUrl('engine_worker.js')).then(response => response.text()),
+    fetch(extensionUrl('pikafish.js')).then(response => response.text()),
+    fetch(extensionUrl('pikafish.wasm')).then(response => response.blob()),
+    fetch(extensionUrl('pikafish.data')).then(response => response.blob()),
+  ]).then(([workerSource, engineSource, wasmBlob, dataBlob]) => ({
+    workerUrl: URL.createObjectURL(new Blob([workerSource], { type: 'text/javascript' })),
+    engineScriptUrl: URL.createObjectURL(new Blob([engineSource], { type: 'text/javascript' })),
+    assets: {
+      'pikafish.wasm': URL.createObjectURL(wasmBlob),
+      'pikafish.data': URL.createObjectURL(dataBlob),
+    },
+  })).catch(error => {
+    wasmAssetsPromise = null;
+    throw error;
+  });
+
+  return wasmAssetsPromise;
+}
+
+const OFFLINE_VALUES = {
+  1: 10000, 2: 20, 3: 20, 4: 40, 5: 90, 6: 45, 7: 10,
+};
+
+function offlineMaterial(board, side) {
+  return board.flat().reduce((score, piece) => {
+    if (!piece) return score;
+    const value = OFFLINE_VALUES[Math.abs(piece)] || 0;
+    return score + (XQ.pieceColor(piece) === side ? value : -value);
+  }, 0);
+}
+
+function offlineEvaluate(board, side) {
+  if (!XQ.findKing(board, side)) return -Infinity;
+  if (!XQ.findKing(board, -side)) return Infinity;
+
+  const ownMoves = XQ.getLegalMoves(board, side);
+  const enemyMoves = XQ.getLegalMoves(board, -side);
+  let score = offlineMaterial(board, side);
+  score += (ownMoves.length - enemyMoves.length) * 0.2;
+  if (XQ.isInCheck(board, side)) score -= 500;
+  if (XQ.isInCheck(board, -side)) score += 500;
+  return score;
+}
+
+function offlineBestMove(board, side) {
+  const legalMoves = XQ.getLegalMoves(board, side);
+  let bestMove = null;
+  let bestScore = -Infinity;
+
+  for (const move of legalMoves) {
+    const next = XQ.makeMove(board, move).board;
+    let score = offlineEvaluate(next, side);
+    const replies = XQ.getLegalMoves(next, -side);
+
+    // Chọn nước có kết quả xấu nhất sau phản đòn tốt nhất của đối thủ.
+    if (replies.length) {
+      const worstReply = Math.min(...replies.map(reply => {
+        const replyBoard = XQ.makeMove(next, reply).board;
+        return offlineEvaluate(replyBoard, side);
+      }));
+      score = (score * 0.35) + (worstReply * 0.65);
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMove = move;
+    }
+  }
+
+  LOG(`OFFLINE_ENGINE: ${legalMoves.length} moves, score=${bestScore.toFixed(1)}`);
+  return bestMove;
+}
 
 /* prewarmEngine không cần nữa với cloud engine,
    giữ lại stub để không phá code gọi nó ở toggleHighlight. */
@@ -339,50 +414,44 @@ function parseSfMove(sfMove) {
   return [fr, fc, tr, tc];
 }
 
-/* Main engine call — gọi Cloudflare Worker (Pikafish) qua fetch() */
-async function engineBestMove(board, side) {
-  const fen = boardToFen(board, side);
-  const id  = ++_reqId;
+/* Main engine call — chạy Pikafish WASM trực tiếp trong Web Worker */
+async function wasmBestMove(board, side) {
+  const wasmAssets = await loadWasmAssets();
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(wasmAssets.workerUrl);
+    const timeoutMs = CFG.DEPTH > 0 ? 120000 : CFG.THINK_MS + 30000;
+    const timer = setTimeout(() => {
+      worker.terminate();
+      reject(new Error('Engine timeout — Pikafish WASM không phản hồi'));
+    }, timeoutMs);
 
-  // Depth search: CF Worker có 30s CPU, dùng 60s timeout cho an toàn.
-  // Movetime: THINK_MS + 15s dự phòng network.
-  const totalTimeout = CFG.DEPTH > 0 ? 60000 : CFG.THINK_MS + 15000;
+    const finish = (callback, value) => {
+      clearTimeout(timer);
+      worker.terminate();
+      callback(value);
+    };
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), totalTimeout);
-
-  LOG(`ENGINE_COMPUTE #${id} | depth=${CFG.DEPTH} | FEN: ${fen.slice(0, 40)}...`);
-
-  try {
-    const resp = await fetch(WORKER_URL, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        fen,
-        depth:       CFG.DEPTH,
-        timeLimitMs: CFG.THINK_MS,
-      }),
-      signal: controller.signal,
+    worker.onmessage = event => {
+      const data = event.data || {};
+      if (data.type === 'bestmove') finish(resolve, parseSfMove(data.move));
+      else if (data.type === 'error') finish(reject, new Error(data.error));
+    };
+    worker.onerror = event => finish(reject, new Error(event.message || 'Pikafish WASM worker error'));
+    worker.postMessage({
+      fen: boardToFen(board, side),
+      depth: CFG.DEPTH,
+      timeLimitMs: CFG.THINK_MS,
+      engineScriptUrl: wasmAssets.engineScriptUrl,
+      assets: wasmAssets.assets,
     });
+  });
+}
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => resp.statusText);
-      throw new Error(`Worker error ${resp.status}: ${text}`);
-    }
-
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error);
-
-    LOG(`ENGINE_COMPUTE #${id} → ${data.move}`);
-    return parseSfMove(data.move);
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      throw new Error('Engine timeout — Cloudflare Worker không phản hồi');
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
+async function engineBestMove(board, side) {
+  if (CFG.ENGINE_MODE === 'mock') return offlineBestMove(board, side);
+  const id = ++_reqId;
+  LOG(`ENGINE_COMPUTE #${id} | mode=WASM | depth=${CFG.DEPTH}`);
+  return wasmBestMove(board, side);
 }
 
 /* ══════════════════════════════════════════════════════
@@ -589,6 +658,7 @@ function removeHighlight() {
   const old = document.getElementById(OVERLAY_ID);
   if (old) old.remove();
   lastMove = null;
+  lastMoveDetail = null;
 }
 
 function drawHighlight(move, side) {
@@ -716,6 +786,7 @@ function detectTurnFromBoardDiff(prev, curr) {
 async function computeAndHighlight(board, turn) {
   if (!myColor) myColor = detectMyColor();
   if (myColor && turn !== myColor) {
+    LOG(`Skip highlight: waiting for ${myColor === XQ.RED ? 'RED' : 'BLACK'} turn, detected ${turn === XQ.RED ? 'RED' : 'BLACK'}`);
     removeHighlight();
     const oppName = turn === XQ.RED ? 'Đỏ' : 'Đen';
     setPanelStatus(`⏳ Lượt ${oppName} — chờ...`);
@@ -743,7 +814,8 @@ async function computeAndHighlight(board, turn) {
   lastComputedKey = ck;
   const boardSnapshot = boardKey(board);   // snapshot để phát hiện bàn thay đổi
   const sideName = turn === XQ.RED ? 'Đỏ' : 'Đen';
-  setPanelStatus(`🧠 Cloud engine tính... (${sideName})`);
+  const engineName = CFG.ENGINE_MODE === 'mock' ? 'Offline evaluator' : 'Pikafish WASM';
+  setPanelStatus(`🧠 ${engineName} tính... (${sideName})`);
 
   try {
     const legalMoves = XQ.getLegalMoves(board, turn);
@@ -789,6 +861,7 @@ async function computeAndHighlight(board, turn) {
       updateMoveFrame();
       setPanelStatus(`✔ ${sideName}: ${fromCoord} → ${toCoord}`);
     } else {
+      lastMoveDetail = null;
       setPanelStatus('Engine không trả về nước');
     }
   } catch (e) {
@@ -815,6 +888,7 @@ async function onBoardChanged(board) {
   /* Ưu tiên: board-diff > timer > myColor > RED */
   const turnFromDiff  = detectTurnFromBoardDiff(prevBoardSnapshot, board);
   const turn = turnFromDiff || detectCurrentTurn() || myColor || XQ.RED;
+  LOG(`BOARD_CHANGE: diff=${turnFromDiff === XQ.RED ? 'RED' : turnFromDiff === XQ.BLACK ? 'BLACK' : 'unknown'} → turn=${turn === XQ.RED ? 'RED' : 'BLACK'}`);
 
   /* Lưu bản copy bàn hiện tại cho lần diff kế tiếp */
   prevBoardSnapshot = board.map(row => row.slice());
@@ -1187,6 +1261,7 @@ function toggleHighlight() {
     timerHistory      = [];
     _sqCacheTs        = 0;
     lastComputedKey   = '';
+    lastMoveDetail    = null;
     prevBoardSnapshot = null;
     pendingBoard      = null;
     pendingTurn       = null;
@@ -1199,6 +1274,7 @@ function toggleHighlight() {
       LOG(`Initial read: ${detected} pieces, myColor=${myColor===XQ.RED?'RED':myColor===XQ.BLACK?'BLACK':'null'}`);
       if (detected >= 4) {
         lastBoardKey = boardKey(board);
+        prevBoardSnapshot = board.map(row => row.slice());
         const turn = detectCurrentTurn() || myColor || XQ.RED;
         await computeAndHighlight(board, turn);
       } else {
