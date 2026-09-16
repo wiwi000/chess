@@ -41,9 +41,9 @@ self.onmessage = ({ data }) => {
           return;
         }
         try {
-          Module.FS.close(0);
-          Module.FS.writeFile('/uci-input', commands);
-          Module.FS.open('/uci-input', 'r');
+          // stdin đã được cấp qua Module.stdin (feed từng ký tự UCI command
+          // ở trên) — không cần đóng/mở lại FS thủ công. Gọi thẳng callMain()
+          // là đủ để runtime tự đọc qua Module.stdin.
           Module.callMain([]);
         } catch (error) {
           self.postMessage({ type: 'error', error: error.message });
